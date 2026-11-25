@@ -156,7 +156,9 @@ const uint32_t err = can0.begin(s);              // call from a task pinned to c
 - Monitor `busErrorCount()`, `isBusOff()`, `txErrorCounter()` and `rxErrorCounter()`. On bus-off: log it, mark both drivers Offline (forces 0 A in the gate), and call `recoverFromBusOff()` from the supervisor, not the control task.
 - The S31 has 3 mask filters and 1 range filter. Only one mask filter is used now.
 
-### 4.2 Frames (BLDC-Driver protocol 6, firmware ≥ 1.6)
+### 4.2 Frames (BLDC-Driver protocol 7, firmware ≥ 1.7)
+
+Always target the latest BLDC-Driver; checked against firmware 1.7.1 (2026-11-25).
 
 Floats are IEEE-754 **big-endian**. Node *n* ∈ 1..15; left = 1, right = 2 by default, configurable.
 
@@ -181,12 +183,14 @@ Driver → controller, on `0x100 + n` (check the length; ignore extra bytes):
 
 Controller → driver commands used, on `0x020 + n`:
 
-- `[0x10]` Start FOC. Blocks the driver 1–3 s, then it replies.
+- `[0x10]` Start FOC. Blocks the driver about 0.3 s with a stored alignment, a few seconds without (sensor alignment), then it replies. The start timeout is 5 s (§4.3).
 - `[0x20]` GET_INFO.
 - `[0x27][page]` GET_BOARD_INFO.
 - `[0x22][0x10][f32 ms]` SET_PARAM velocity interval. Runtime only: re-send after every driver reset.
 
 **Never send** SAVE (`0x24`), REBOOT (`0x26`) or node/invert changes while balancing; both stop the motor. Driver configuration is done with CAN Bench, not from this firmware, unless the user asks.
+
+**Anti-cogging** (`CMD_COGGING` `0x29`, `PARAM_COG_COMP`, protocol 7) is configured and calibrated with CAN Bench only; this firmware never sends them. A calibration aborts if a current command above 50 mA arrives, so calibrate with the controller off the bus or in `Disabled` (it sends 0 A).
 
 Full reference: [can-protocol.md](https://github.com/clawntl/BLDC-Driver/blob/main/docs/can-protocol.md).
 

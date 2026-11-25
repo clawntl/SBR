@@ -4,7 +4,9 @@
 
 #include "app/Console.h"
 #include "app/StatusLed.h"
+#include "app/Telemetry.h"
 #include "can/CanBus.h"
+#include "control/ControlTask.h"
 #include "imu/Lsm6dsv16x.h"
 
 void setup()
@@ -26,15 +28,22 @@ void setup()
 
     Console::printBanner();
 
-    // Protoboard bring-up (Stage 1). Both install their interrupts on core 1.
+    // IMU and CAN both install their interrupts on core 1 (spec §8.2 rule 1).
     if (Lsm6dsv16x::begin()) {
         uint8_t id    = 0;
         const bool ok = Lsm6dsv16x::readWhoAmI(id);
         Serial.printf("IMU: WHO_AM_I 0x%02X %s\n", id,
                       !ok ? "(SPI error)" : id == LSM6DSV16X_ID ? "ok" : "WRONG, expected 0x70");
+        if (ok && id == LSM6DSV16X_ID && Lsm6dsv16x::configure()) {
+            // From here only the control task talks to the IMU.
+            if (!ControlTask::start()) Serial.println("control task: start FAILED");
+        } else {
+            Serial.println("IMU: not configured; control task not started");
+        }
     }
     CanBus::begin();
 
+    Telemetry::start();
     StatusLed::start();
     Console::start();
 

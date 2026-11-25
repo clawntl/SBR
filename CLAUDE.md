@@ -11,10 +11,10 @@ Controller firmware for a two-wheeled balancing robot with rings (sister project
 - Ask before changing pins, CAN IDs, the protocol, dependencies, or anything listed as decided (spec §1.3). If a stage needs an open decision (spec §12), ask.
 - Every motor current goes through the safety gate. Never write code that can drive the motors outside the stage that introduces it.
 - Pin every version (platform, libraries, vendored code).
-- Always check [clawntl/BLDC-Driver](https://github.com/clawntl/BLDC-Driver) for updates that affect the design (CAN protocol version, frames, `docs/can-protocol.md`, `docs/boards/minifoc_mk2.md`, firmware version), at the start of each stage and before writing CAN or driver code. Report anything that changed against spec §4, and ask before adapting to it.
+- Always target the latest [clawntl/BLDC-Driver](https://github.com/clawntl/BLDC-Driver). At the start of each stage and before writing CAN or driver code, check it for changes (CAN protocol version, frames, `docs/can-protocol.md`, `docs/boards/minifoc_mk2.md`, firmware version). Update spec §4 and the code to match without asking, and report what changed. Still ask if a change would alter a decided item (spec §1.3), the pin map or the motor-safety rules.
 
 ## Current stage
 
-Stage 1 accepted 2026-11-25. Stage 2 (IMU stream) next.
+Stage 2 accepted 2026-11-25. Stage 3 (our gravity filter) next.
 
 Update this line when a stage is accepted.

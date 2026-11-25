@@ -6,11 +6,14 @@
 #include <esp_system.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "Config.h"
+#include "app/Telemetry.h"
 #include "can/CanBus.h"
+#include "control/ControlTask.h"
 #include "imu/Lsm6dsv16x.h"
 
 static_assert(ESP_ARDUINO_VERSION_MAJOR == FW_EXPECT_ARDUINO_MAJOR &&
@@ -53,30 +56,69 @@ void cmdImuId(const char *arg)
             return;
         }
     }
-    long good = 0, wrong = 0, spiErr = 0;
-    uint8_t id = 0, lastWrong = 0;
-    for (long i = 0; i < n; ++i) {
-        if (!Lsm6dsv16x::readWhoAmI(id)) {
-            ++spiErr;
-        } else if (id == LSM6DSV16X_ID) {
-            ++good;
-        } else {
-            ++wrong;
-            lastWrong = id;
-        }
-    }
-    if (n == 1) {
-        if (spiErr) {
-            Serial.println("WHO_AM_I: SPI error");
-        } else {
-            Serial.printf("WHO_AM_I = 0x%02X (%s)\n", id,
-                          id == LSM6DSV16X_ID ? "ok, LSM6DSV16X" : "WRONG, expected 0x70");
-        }
+    // The control task owns the SPI bus, so it does the reads.
+    ControlTask::WhoAmIResult r;
+    if (!ControlTask::whoAmI(static_cast<uint32_t>(n), r)) {
+        Serial.println("WHO_AM_I: no answer from the control task");
         return;
     }
-    Serial.printf("WHO_AM_I: %ld/%ld correct, %ld wrong", good, n, wrong);
-    if (wrong) Serial.printf(" (last 0x%02X)", lastWrong);
-    Serial.printf(", %ld SPI errors\n", spiErr);
+    Serial.printf("WHO_AM_I: %lu/%ld correct (0x70), %lu wrong",
+                  static_cast<unsigned long>(r.good), n, static_cast<unsigned long>(r.wrong));
+    if (r.wrong) Serial.printf(" (last 0x%02X)", r.lastWrong);
+    Serial.printf(", %lu SPI errors\n", static_cast<unsigned long>(r.spiErrors));
+}
+
+// `stream q` / `stream off` (spec §8.3).
+void cmdStream(const char *arg)
+{
+    Telemetry::Stream s;
+    if (strcmp(arg, "q") == 0) {
+        s = Telemetry::Stream::Quat;
+    } else if (strcmp(arg, "off") == 0) {
+        s = Telemetry::Stream::Off;
+    } else {
+        Serial.println("usage: stream q|off");
+        return;
+    }
+    if (!Telemetry::setStream(s)) Serial.println("stream: control task not running");
+}
+
+// `imu`: sample and cycle rates over 2 s, counters since boot, latest data.
+void cmdImu()
+{
+    constexpr uint32_t kWindowMs = 2000;
+    ControlTask::Snapshot a, b;
+    if (!ControlTask::read(a)) {
+        Serial.println("imu: control task not running");
+        return;
+    }
+    vTaskDelay(pdMS_TO_TICKS(kWindowMs));
+    ControlTask::read(b);
+
+    const float dt = (b.tUs - a.tUs) * 1e-6f;
+    const ControlTask::ImuCounters &c = b.imu;
+    Serial.printf("IMU: INT1 %s, SPI bus %s\n", b.int1Ok ? "ok" : "NOT SET UP",
+                  b.spiBusOk ? "held" : "NOT HELD");
+    Serial.printf("  over %.2f s: %.1f cycles/s, %.1f samples/s (IMU ODR %.1f Hz from freq fine %d)\n",
+                  dt, (c.cycles - a.imu.cycles) / dt, (c.pairs - a.imu.pairs) / dt,
+                  Lsm6dsv16x::kOdrHz * (1.0f + 0.0013f * Lsm6dsv16x::freqFine()),
+                  Lsm6dsv16x::freqFine());
+    Serial.printf("  since boot (%lu s): cycles %lu, samples %lu, INT1 timeouts %lu\n",
+                  static_cast<unsigned long>(b.tUs / 1000000), static_cast<unsigned long>(c.cycles),
+                  static_cast<unsigned long>(c.pairs), static_cast<unsigned long>(c.intTimeouts));
+    Serial.printf("  overruns %lu, late %lu, unpaired %lu, bad tags %lu, SPI errors %lu, "
+                  "max FIFO level %u\n",
+                  static_cast<unsigned long>(c.overruns), static_cast<unsigned long>(c.late),
+                  static_cast<unsigned long>(c.unpaired), static_cast<unsigned long>(c.badTags),
+                  static_cast<unsigned long>(c.spiErrors), c.maxLevel);
+    constexpr float kRadToDeg = 57.29578f;
+    Serial.printf("  accel  %+.3f %+.3f %+.3f g (|a| %.3f)\n", b.accel[0], b.accel[1],
+                  b.accel[2],
+                  sqrtf(b.accel[0] * b.accel[0] + b.accel[1] * b.accel[1] + b.accel[2] * b.accel[2]));
+    Serial.printf("  gyro   %+.2f %+.2f %+.2f dps\n", b.gyro[0] * kRadToDeg, b.gyro[1] * kRadToDeg,
+                  b.gyro[2] * kRadToDeg);
+    Serial.printf("  SFLP gravity %+.3f %+.3f %+.3f g (%lu samples)\n", b.gravity[0],
+                  b.gravity[1], b.gravity[2], static_cast<unsigned long>(b.gravityCount));
 }
 
 // `canping`: one ping on 0x7F0, then the bus status. `canping on|off`: ping
@@ -121,9 +163,13 @@ void handleLine(char *line)
         cmdCanPing(arg);
     } else if (strcmp(line, "canloop") == 0 && *arg == '\0') {
         CanBus::loopbackSelfTest();
+    } else if (strcmp(line, "stream") == 0) {
+        cmdStream(arg);
+    } else if (strcmp(line, "imu") == 0 && *arg == '\0') {
+        cmdImu();
     } else {
         Serial.printf("unknown command: %s%s%s\n", line, *arg ? " " : "", arg);
-        Serial.println("commands: ver, imuid [n], canping [on|off], canloop");
+        Serial.println("commands: ver, imuid [n], imu, stream q|off, canping [on|off], canloop");
     }
 }
 
