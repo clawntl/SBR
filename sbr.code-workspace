@@ -1,0 +1,7 @@
+{
+  "folders": [
+    { "path": "firmware", "name": "firmware" },
+    { "path": ".", "name": "repo" }
+  ],
+  "settings": {}
+}
