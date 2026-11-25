@@ -3,6 +3,7 @@
 #include <Arduino.h>
 
 #include "app/Console.h"
+#include "app/Settings.h"
 #include "app/StatusLed.h"
 #include "app/Telemetry.h"
 #include "can/CanBus.h"
@@ -36,7 +37,9 @@ void setup()
                       !ok ? "(SPI error)" : id == LSM6DSV16X_ID ? "ok" : "WRONG, expected 0x70");
         if (ok && id == LSM6DSV16X_ID && Lsm6dsv16x::configure()) {
             // From here only the control task talks to the IMU.
-            if (!ControlTask::start()) Serial.println("control task: start FAILED");
+            const float mount = Settings::loadMountPitch();
+            Serial.printf("EST: mounting offset %+.2f deg (from NVS)\n", mount * 57.29578f);
+            if (!ControlTask::start(mount)) Serial.println("control task: start FAILED");
         } else {
             Serial.println("IMU: not configured; control task not started");
         }

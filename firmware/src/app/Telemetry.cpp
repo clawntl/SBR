@@ -29,6 +29,11 @@ void telemetryTask(void *)
             lastQuat = s.quatCount;
             // IMU-Visualiser quaternion mode: w;x;y;z
             Serial.printf("%.5f;%.5f;%.5f;%.5f\n", s.quat[0], s.quat[1], s.quat[2], s.quat[3]);
+        } else if (gStream == Telemetry::Stream::Euler) {
+            // IMU-Visualiser Euler mode: roll;pitch;yaw in degrees = lambda;theta;psi
+            constexpr float kRadToDeg = 57.2957795f;
+            Serial.printf("%.3f;%.3f;%.3f\n", s.est.lambda * kRadToDeg, s.est.theta * kRadToDeg,
+                          s.est.psi * kRadToDeg);
         }
 
         // Spec §5.2 step 6: overruns and late drains are logged from core 0,

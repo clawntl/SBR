@@ -15,6 +15,6 @@ Controller firmware for a two-wheeled balancing robot with rings (sister project
 
 ## Current stage
 
-Stage 2 accepted 2026-11-25. Stage 3 (our gravity filter) next.
+Stage 3 code done 2026-11-25 (unit tests pass, stream e checked by eye). Its hardware acceptance tests (angle jig, swing, slide) are shelved by the user until an angle rig exists. Stage 4 (MiniFOC link) next.
 
 Update this line when a stage is accepted.

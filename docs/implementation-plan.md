@@ -38,7 +38,7 @@ Last updated 2026-11-25.
 The robot has **two rings in the pitch plane** (one each side, outboard of the wheels; see the user's CAD). Their centre is close to the centre of mass, **well above the wheel axle**. Consequences:
 
 - **On its wheels** (near upright) the robot is an ordinary inverted pendulum: the CoM sits a distance l ≈ d_c above the axle, where d_c is the axle-to-ring-centre distance.
-- **On its rings** (every other pose, including upside down) the wheels are in the air and work as reaction wheels. Gravity pulls only weakly, through the small CoM offset ε from the ring centre: the robot settles where the CoM is lowest, and holding any other pose needs a small steady torque.
+- **On its rings** (every other pose, including upside down) the wheels are in the air and work as reaction wheels. The rings are **ellipses**, 150 mm tall (body z) × 135 mm wide (body x) when upright, so the ring centre rides at h(θ) = √(a²·sin²θ + b²·cos²θ) above the floor (a = 67.5 mm, b = 75 mm): 75 mm on the ring ends (upright, inverted), 67.5 mm lying on the front or back. A 66 mm circle about the axle is cut out of the rings (may be enlarged later), so near upright the ring rests on the two cut corners instead of the ellipse bottom; h(θ) is the support function of what remains. Gravity therefore pulls through the CoM height change as well as the small CoM offset ε: the robot settles lying on its front or back, standing on the ring ends (inverted included) is an unstable balance point, and holding a pose in between needs a steady torque of up to about m·g·7.5 mm.
 - **Self-righting** means rolling on the rings from a pose such as 90° (lying on its front or back) up onto the wheels. That's ring mode plus the hand-over to wheel mode (Stage 9).
 
 The firmware must balance upright on the wheels, hold poses on the rings (upside down included), and eventually move between the two (§7).
@@ -266,6 +266,8 @@ Half-floats are only needed if the game vector is ever enabled for the visualise
 
 ## 6. Estimator
 
+Explainer with diagrams: [gravity-filter.html](gravity-filter.html).
+
 ### 6.1 Gravity filter
 
 A Mahony-style filter on the unit up-vector, at the 960 Hz IMU rate. No quaternion and no Euler angles, so there is no singularity anywhere. The state is **u** (unit 3-vector) and gyro bias **b** (3-vector).
@@ -278,7 +280,7 @@ Per IMU sample (ω_m rad/s, f_m m/s², dt s):
    - α = angular acceleration, from successive gyro samples through a first-order low-pass (cut-off a config value, start at 40 Hz).
    - The reference point depends on the contact mode (§7.1):
      - **Wheel mode:** reference point = axle; r = r_imu. a_ref = v̇·h + v·ψ̇·(u × h): axle acceleration along h plus turning centripetal. v = r_w·(φ̇_rel,mean + θ̇) is the ground speed from the wheels; v̇ is v differentiated and low-passed.
-     - **Ring mode:** reference point = ring centre; r = r_imu − (0, 0, d_c). The rings roll without slipping, so a_ref = R·θ̈·h, with θ̈ = α_y. The centre moves R·θ̇ along h.
+     - **Ring mode:** reference point = ring centre; r = r_imu − (0, 0, d_c). The elliptical rings roll without slipping, so the centre moves h(θ)·θ̇ along h and h′(θ)·θ̇ along u: a_ref = (h·θ̈ + h′·θ̇²)·h + (h′·θ̈ + h″·θ̇²)·u, with θ̇ = ω_y and θ̈ = α_y (h(θ) as in §1.1; a circle of radius R gives a_ref = R·θ̈·h).
      - Near the mode boundary use the mode the controller is in.
    - f_pred above uses that a_ref in place of a_axle, and that r in place of r_imu.
    - h = normalize(ŷ × u) is the horizontal direction perpendicular to the axle. It's undefined when the axle is vertical: skip the correction there.
@@ -290,7 +292,7 @@ Per IMU sample (ω_m rad/s, f_m m/s², dt s):
    - b ← b − k_i·w·e·dt (clamp |b| ≤ 0.1 rad/s per axis)
 6. **Propagate:** u ← normalize(u − dt·(ω_c × u))
 
-Starting gains, to tune in Stage 3: k_p = 1.0 rad/s, k_i = 0.01 rad/s². Bias along **u** (yaw) is unobservable from gravity. Leave it unless the user wants a still-detector to learn it.
+Gains: k_p = 1.0 rad/s, k_i = 0.1 rad/s² (Stage 3: the starting 0.01 learns a bias with τ ≈ 100 s and fails the §6.3 bias test; 0.1 gives τ ≈ 9 s). Bias along **u** (yaw) is unobservable from gravity. Leave it unless the user wants a still-detector to learn it.
 
 ### 6.2 Outputs (published every control cycle)
 
@@ -311,7 +313,7 @@ Starting gains, to tune in Stage 3: k_p = 1.0 rad/s, k_i = 0.01 rad/s². Bias al
 - Static poses at θ = 0, ±10, ±90, ±179, 180°, with side lean 0 and 20°: θ error < 0.05° after settling.
 - Constant rotation about y: tracking error < 0.1°.
 - Gyro bias of 0.02 rad/s on y: converges and θ error < 0.2° after 30 s.
-- **Lever-arm tests:** (a) wheel mode, body swinging about the axle (θ = 10°·sin(2π·1.5 t)); (b) ring mode, rolling on the rings (θ = 40°·sin(2π·0.8 t)). Use placeholder r_imu, d_c and R until the user gives the real ones. With compensation, peak θ error < 0.5°. Report the same figure with compensation off.
+- **Lever-arm tests:** (a) wheel mode, body swinging about the axle (θ = 10°·sin(2π·1.5 t)); (b) ring mode, rolling on the rings (θ = 40°·sin(2π·0.8 t)). Use the robot's geometry (§7.1); test the ellipse terms against independently computed rolling kinematics. With compensation, peak θ error < 0.5°. Report the same figure with compensation off.
 - Wrap: θ crossing ±180° produces no jump in wrap(θ − θ_ref).
 - `half_to_float`: normals, subnormals, ±0, ±inf, NaN.
 
@@ -325,19 +327,21 @@ Config values from CAD (the user will supply them, §12):
 
 | Value | Meaning |
 |---|---|
-| R | Ring radius (rolling surface) |
+| a, b | Ring ellipse semi-axes along body x and z: 67.5 mm and 75 mm |
 | r_w | Wheel radius |
 | d_c | Axle to ring centre along body +z (positive: ring centre above the axle) |
 | b | Track width |
 
 The CoM is at the ring centre plus a small unknown offset ε.
 
-The wheels touch the ground when their lowest point is at or below the ring's: d_c·cos θ + r_w ≥ R. That holds for |θ| ≤ θ_c = acos((R − r_w)/d_c), on the upright side only. If (R − r_w)/d_c ≥ 1 the wheels never protrude: stop and ask.
+The wheels touch the ground when their lowest point is at or below the ring's: d_c·cos θ + r_w ≥ h(θ). That holds for |θ| ≤ θ_c (solved numerically at start-up), on the upright side only. If d_c + r_w ≤ b the wheels never protrude: stop and ask.
+
+The robot (CAD, 2026-11-25): r_imu = (0, 0, 56.5 mm), d_c = 48 mm, r_w = 29 mm (58 mm wheels, approximate), a = 67.5 mm, b = 75 mm. Ring cut: 66 mm diameter about the axle. Upright the wheels reach 2 mm below the uncut ellipse; with the cut, θ_c ≈ 20.3° (19.7° without it). Track width b_track: not given yet (needed in Stage 6).
 
 | Mode | Pose | Plant | Controller |
 |---|---|---|---|
 | **W** (wheels) | \|θ\| < θ_c − hyst | Two-wheeled inverted pendulum, CoM l = d_c + ε above the axle | 6-state LQR, §7.2 |
-| **R** (rings) | \|θ\| > θ_c + hyst (upside down included) | Body rolls on the rings; wheels in the air act as reaction wheels; near-neutral | 3-state controller, §7.3 |
+| **R** (rings) | \|θ\| > θ_c + hyst (upside down included) | Body rolls on the elliptical rings; wheels in the air act as reaction wheels; not neutral (§1.1) | 3-state controller, §7.3 |
 
 - Between the two thresholds the mode doesn't change (hysteresis, config, start at 2°).
 - Also cross-check contact from behaviour. In mode W, wheel speed and body motion agree with rolling on the wheels; with the wheels in the air they don't. Log disagreements; don't act on them until reviewed.
@@ -367,8 +371,8 @@ The wheels touch the ground when their lowest point is at or below the ring's: d
 ### 7.3 Ring mode: model and controller
 
 **Model:**
-- The body and rings roll without slipping, so the ring centre moves R·θ̇ along h. Pose and position are tied: rolling 2πR turns the robot over once.
-- Gravity torque is m·g·ε·sin θ, small.
+- The body and rings roll without slipping, so the ring centre moves h(θ)·θ̇ along h and h′(θ)·θ̇ vertically (§1.1, §6.1). Pose and position are tied: rolling the ellipse's perimeter (about 450 mm) turns the robot over once.
+- Gravity torque comes from the ring-centre height h(θ) (up to about m·g·7.5 mm, pulling towards lying on the front or back) plus m·g·ε·sin θ. **To be reworked for the ellipse in Stage 9**, including what poses can be held (a steady torque spins the reaction wheels up).
 - The wheels are free rotors: motor torque τ = K_t·i accelerates them and pushes back on the body.
 - Equations of motion: (I_body+rings about contact + m·R²)·θ̈ = −2τ_eff + m·g·ε·sin θ, and I_w·(θ̈ + φ̈_rel) = τ. Derive exactly in tools/model.
 
@@ -394,7 +398,7 @@ A drive command never goes into the controller as a current or a disturbance. It
 4. **Anti-windup:** clamp |φ − φ_ref| and |ψ − ψ_ref| to config limits. When clamped, move the reference, not the state, so a long push doesn't store up error.
 5. **Engage:** φ_ref = φ and ψ_ref = ψ, so starting is bumpless.
 
-**Mode R:** the command is a target pose θ_target (e.g. 180°) or a roll distance converted to Δθ = Δx / R, ramped at a rate limit.
+**Mode R:** the command is a target pose θ_target (e.g. 180°) or a roll distance converted to Δθ through ∫h(θ)dθ = Δx, ramped at a rate limit.
 
 **Mode changes (Stage 9):**
 - Wheels to rings: ramp θ_ref past θ_c, then hand over to mode R.
@@ -622,8 +626,8 @@ The user will mark these; check the overview doc for the latest answers.
 
 | Decision | Default | Needed before |
 |---|---|---|
-| IMU position `r_imu` relative to the axle | From CAD | Stage 3 |
-| Geometry: R, r_w, d_c, b (θ_c follows) | From CAD | Stage 6 (placeholders before) |
+| IMU position `r_imu` relative to the axle | Given: (0, 0, 56.5 mm) | Done (Stage 3) |
+| Geometry: r_imu, ring ellipse, r_w, d_c given 2026-11-25 (§7.1); track width b still open | From CAD | Stage 6 |
 | CoM offset ε from the ring centre | ≈ 0 by design; checked in Stage 6 | Stage 6 |
 | Saturation priority | Plain per-wheel clamp | Stage 7 |
 | Command source beyond serial | Serial only | Stage 8 |

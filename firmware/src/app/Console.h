@@ -1,4 +1,4 @@
-// Text console over USB CDC (spec §8.3). Stage 2: ver, imuid, imu, stream, canping, canloop.
+// Text console over USB CDC (spec §8.3). Stage 3: ver, imuid, imu, stream, zero, peak, canping, canloop.
 #pragma once
 
 namespace Console {

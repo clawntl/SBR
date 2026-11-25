@@ -10,10 +10,12 @@
 
 #include "Config.h"
 #include "PinConfig.h"
+#include "est/GravityFilter.h"
 #include "imu/FifoDecoder.h"
 #include "imu/Lsm6dsv16x.h"
 #include "util/Half.h"
 #include "util/Snapshot.h"
+#include "util/Wrap.h"
 
 namespace {
 
@@ -21,8 +23,11 @@ constexpr uint32_t kIntTimeoutMs    = 3;   // about 3 IMU periods
 constexpr uint32_t kWhoAmIPerCycle  = 8;
 constexpr int kMaxDrainPasses       = 4;
 constexpr float kDegToRad           = 0.017453292519943f;
+// IMU timestamp counter: 48 ticks per 960 Hz sample, from the same clock as
+// the ODR (so INTERNAL_FREQ_FINE scales both). Checked with `imu`.
+constexpr float kTsTicksPerSecond   = 46080.0f;
 
-enum class ReqKind : uint8_t { GameVector, WhoAmI };
+enum class ReqKind : uint8_t { GameVector, WhoAmI, Zero, PeakStart };
 struct Request {
     ReqKind kind;
     uint32_t arg;
@@ -33,7 +38,8 @@ TaskHandle_t gTask    = nullptr;
 QueueHandle_t gQueue  = nullptr;
 ::Snapshot<ControlTask::Snapshot> gSnap;
 ::Snapshot<ControlTask::WhoAmIResult> gWho;
-volatile int64_t gIntUs = 0;  // last INT1 time (Stage 5 latency)
+volatile int64_t gIntUs   = 0;  // last INT1 time (Stage 5 latency)
+float gStartMountPitch    = 0.0f;
 
 void IRAM_ATTR int1Isr(void *)
 {
@@ -43,6 +49,21 @@ void IRAM_ATTR int1Isr(void *)
     portYIELD_FROM_ISR(woken);
 }
 
+GravityFilterConfig filterConfig(bool leverArm)
+{
+    GravityFilterConfig c;
+    c.kp            = kFilterKp;
+    c.ki            = kFilterKi;
+    c.alphaCutoffHz = kFilterAlphaCutoffHz;
+    c.leverArm      = leverArm;
+    c.rImu          = Vec3(kImuPosM[0], kImuPosM[1], kImuPosM[2]);
+    c.dC            = kAxleToRingCentreM;
+    c.ringHalfWidth  = kRingHalfWidthM;
+    c.ringHalfHeight = kRingHalfHeightM;
+    c.ringCutRadius  = 0.5f * kRingCutDiameterM;
+    return c;
+}
+
 // State owned by the control task.
 struct State {
     ControlTask::Snapshot snap{};
@@ -50,29 +71,155 @@ struct State {
     uint32_t pairsThisDrain = 0;
     bool overrunLatched     = false;
 
+    // Estimator.
+    GravityFilter filter{filterConfig(true)};
+    GravityFilter filterNoComp{filterConfig(false)};
+    ContactMode mode = ContactMode::Wheel;
+    float thetaC     = 0.0f;
+    float hyst       = 0.0f;
+    float mount      = 0.0f;   // mounting offset about y, rad
+    float nominalDt  = 0.0f;
+    float tickS      = 0.0f;
+    bool haveTs      = false;
+    uint32_t lastTs  = 0;
+    float thetaSflp  = 0.0f;
+
+    // Peak-error window.
+    float thetaGyro = 0.0f, thetaGyro0 = 0.0f, noComp0 = 0.0f, sflp0 = 0.0f;
+
     // WHO_AM_I request in progress.
     uint32_t whoRemaining = 0;
     ControlTask::WhoAmIResult who{};
 
+    void init(float mountPitch)
+    {
+        mount = mountPitch;
+        const float odr = Lsm6dsv16x::kOdrHz * (1.0f + 0.0013f * Lsm6dsv16x::freqFine());
+        nominalDt = 1.0f / odr;
+        tickS     = 1.0f / (kTsTicksPerSecond * (1.0f + 0.0013f * Lsm6dsv16x::freqFine()));
+        const RingShape ring(kRingHalfWidthM, kRingHalfHeightM, kAxleToRingCentreM,
+                             0.5f * kRingCutDiameterM);
+        thetaC = wheelContactLimit(ring, kAxleToRingCentreM, kWheelRadiusM);
+        snap.est.thetaC = thetaC;
+        hyst      = kModeHysteresisDeg * kDegToRad;
+        snap.est.mountPitch = mount;
+    }
+
+    // Sensor axes -> body axes (R_sb), then the mounting offset.
+    Vec3 toBody(const float s[3]) const
+    {
+        float b[3];
+        applyAxisMap(kRsb, s, b);
+        return rotateY(Vec3(b[0], b[1], b[2]), mount);
+    }
+
+    float sampleDt(uint32_t ts)
+    {
+        float dt = nominalDt;
+        if (haveTs) {
+            dt = static_cast<float>(ts - lastTs) * tickS;  // wraps correctly
+            if (dt < 0.5f * nominalDt || dt > 4.5f * nominalDt) {
+                ++snap.imu.dtGlitches;
+                dt = nominalDt;
+            }
+        }
+        haveTs = true;
+        lastTs = ts;
+        return dt;
+    }
+
+    void updatePeak(float dt)
+    {
+        ControlTask::PeakStats &p = snap.peak;
+        if (!p.active) return;
+        p.seconds += dt;
+        thetaGyro += filter.thetaDot() * dt;
+        const float swing  = fabsf(wrapPi(thetaGyro - thetaGyro0));
+        const float comp   = fabsf(wrapPi(filter.theta() - thetaGyro));
+        const float noComp = fabsf(wrapPi(filterNoComp.theta() - thetaGyro) - noComp0);
+        const float sflp   = fabsf(wrapPi(thetaSflp - thetaGyro) - sflp0);
+        if (swing > p.swing) p.swing = swing;
+        if (comp > p.comp) p.comp = comp;
+        if (noComp > p.noComp) p.noComp = noComp;
+        if (sflp > p.sflp) p.sflp = sflp;
+    }
+
+    void startPeak()
+    {
+        snap.peak        = {};
+        snap.peak.active = true;
+        thetaGyro = thetaGyro0 = filter.theta();
+        noComp0 = wrapPi(filterNoComp.theta() - thetaGyro);
+        sflp0   = wrapPi(thetaSflp - thetaGyro);
+    }
+
+    // `zero`: theta = 0 now.
+    void zero()
+    {
+        const float d = filter.theta();
+        mount = wrapPi(mount + d);
+        filter.rotateAboutY(d);
+        filterNoComp.rotateAboutY(d);
+        snap.est.mountPitch = mount;
+    }
+
+    void publishEstimate(float dt)
+    {
+        ControlTask::Estimate &e = snap.est;
+        e.theta       = filter.theta();
+        e.thetaDot    = filter.thetaDot();
+        e.lambda      = filter.lambda();
+        e.psi         = filter.psi();
+        e.psiDot      = filter.psiDot();
+        e.poseValid   = filter.poseValid();
+        e.ringMode    = mode == ContactMode::Ring;
+        e.bias[0]     = filter.bias().x;
+        e.bias[1]     = filter.bias().y;
+        e.bias[2]     = filter.bias().z;
+        e.accelTrust  = filter.accelTrust();
+        e.thetaNoComp = filterNoComp.theta();
+        e.thetaSflp   = thetaSflp;
+        e.dt          = dt;
+    }
+
     // FifoDecoder sink.
     void onPair(const ImuPair &p)
     {
-        float g[3], a[3];
+        float gs[3], as[3];
         for (int i = 0; i < 3; ++i) {
-            g[i] = p.gyro[i] * (Lsm6dsv16x::kGyroDpsPerLsb * kDegToRad);
-            a[i] = p.accel[i] * Lsm6dsv16x::kAccelGPerLsb;
+            gs[i] = p.gyro[i] * (Lsm6dsv16x::kGyroDpsPerLsb * kDegToRad);
+            as[i] = p.accel[i] * Lsm6dsv16x::kAccelGPerLsb;
         }
-        applyAxisMap(kRsb, g, snap.gyro);
-        applyAxisMap(kRsb, a, snap.accel);
-        snap.imuTs = p.ts;
+        const Vec3 g = toBody(gs);
+        const Vec3 a = toBody(as);
+        snap.gyro[0]  = g.x; snap.gyro[1]  = g.y; snap.gyro[2]  = g.z;
+        snap.accel[0] = a.x; snap.accel[1] = a.y; snap.accel[2] = a.z;
+        snap.imuTs    = p.ts;
         ++snap.imu.pairs;
         ++pairsThisDrain;
+
+        // One estimator update per accel + gyro pair (spec §5.2 step 4).
+        // Wheel speed is 0 until the drivers report it (Stage 4).
+        const float dt = sampleDt(p.ts);
+        GravityInput in;
+        in.gyro  = g;
+        in.accel = a * GravityFilter::kG;
+        in.dt    = dt;
+        in.mode  = mode;
+        filter.update(in);
+        filterNoComp.update(in);
+        mode = nextContactMode(mode, filter.theta(), thetaC, hyst);
+
+        updatePeak(dt);
+        publishEstimate(dt);
     }
     void onGravity(const int16_t v[3])
     {
-        float g[3];
-        for (int i = 0; i < 3; ++i) g[i] = v[i] * (Lsm6dsv16x::kSflpGravMgPerLsb * 0.001f);
-        applyAxisMap(kRsb, g, snap.gravity);
+        float gs[3];
+        for (int i = 0; i < 3; ++i) gs[i] = v[i] * (Lsm6dsv16x::kSflpGravMgPerLsb * 0.001f);
+        const Vec3 g = toBody(gs);
+        snap.gravity[0] = g.x; snap.gravity[1] = g.y; snap.gravity[2] = g.z;
+        thetaSflp = atan2f(-g.x, g.z);  // same convention as the accelerometer
         ++snap.gravityCount;
     }
     void onGame(const uint16_t h[3])
@@ -138,6 +285,13 @@ void handleRequests(State &s)
                 s.who          = {};
                 s.who.id       = r.id;
                 break;
+            case ReqKind::Zero:
+                s.zero();
+                s.snap.zeroAck = r.id;
+                break;
+            case ReqKind::PeakStart:
+                s.startPeak();
+                break;
         }
     }
 
@@ -177,8 +331,10 @@ void controlTask(void *)
     if (err == ESP_OK) err = gpio_isr_handler_add(PIN_IMU_INT1, int1Isr, nullptr);
 
     static State s;  // internal RAM (.bss), not the stack
+    s.init(gStartMountPitch);
     s.snap.int1Ok   = err == ESP_OK;
     s.snap.spiBusOk = Lsm6dsv16x::acquireBus();
+
     for (;;) {
         const uint32_t notified = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(kIntTimeoutMs));
         if (notified > 0) {
@@ -193,11 +349,23 @@ void controlTask(void *)
     }
 }
 
+bool send(const Request &r)
+{
+    return gQueue != nullptr && xQueueSend(gQueue, &r, pdMS_TO_TICKS(100)) == pdTRUE;
+}
+
+uint32_t nextId()
+{
+    static uint32_t id = 0;
+    return ++id;
+}
+
 }  // namespace
 
-bool ControlTask::start()
+bool ControlTask::start(float mountPitch)
 {
-    gQueue = xQueueCreate(4, sizeof(Request));
+    gStartMountPitch = mountPitch;
+    gQueue           = xQueueCreate(4, sizeof(Request));
     if (gQueue == nullptr) return false;
     return xTaskCreatePinnedToCore(controlTask, "control", 4096, nullptr,
                                    configMAX_PRIORITIES - 2, &gTask, 1) == pdPASS;
@@ -207,17 +375,14 @@ bool ControlTask::read(Snapshot &out) { return gSnap.version() > 0 && gSnap.read
 
 bool ControlTask::requestGameVector(bool on)
 {
-    if (gQueue == nullptr) return false;
-    const Request r = {ReqKind::GameVector, on ? 1u : 0u, 0};
-    return xQueueSend(gQueue, &r, pdMS_TO_TICKS(100)) == pdTRUE;
+    return send({ReqKind::GameVector, on ? 1u : 0u, 0});
 }
 
 bool ControlTask::whoAmI(uint32_t n, WhoAmIResult &out)
 {
-    static uint32_t nextId = 1;
-    if (gQueue == nullptr || n == 0) return false;
-    const Request r = {ReqKind::WhoAmI, n, nextId++};
-    if (xQueueSend(gQueue, &r, pdMS_TO_TICKS(100)) != pdTRUE) return false;
+    if (n == 0) return false;
+    const Request r = {ReqKind::WhoAmI, n, nextId()};
+    if (!send(r)) return false;
 
     // kWhoAmIPerCycle reads per ~1 ms cycle, plus margin.
     const TickType_t timeout = pdMS_TO_TICKS(1000 + n / kWhoAmIPerCycle * 2);
@@ -228,3 +393,21 @@ bool ControlTask::whoAmI(uint32_t n, WhoAmIResult &out)
     }
     return false;
 }
+
+bool ControlTask::zero(float &newMountPitch)
+{
+    const Request r = {ReqKind::Zero, 0, nextId()};
+    if (!send(r)) return false;
+    const TickType_t t0 = xTaskGetTickCount();
+    while (xTaskGetTickCount() - t0 < pdMS_TO_TICKS(500)) {
+        Snapshot s;
+        if (read(s) && s.zeroAck == r.id) {
+            newMountPitch = s.est.mountPitch;
+            return true;
+        }
+        vTaskDelay(pdMS_TO_TICKS(2));
+    }
+    return false;
+}
+
+bool ControlTask::peakStart() { return send({ReqKind::PeakStart, 0, 0}); }

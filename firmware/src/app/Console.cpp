@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "Config.h"
+#include "app/Settings.h"
 #include "app/Telemetry.h"
 #include "can/CanBus.h"
 #include "control/ControlTask.h"
@@ -74,10 +75,12 @@ void cmdStream(const char *arg)
     Telemetry::Stream s;
     if (strcmp(arg, "q") == 0) {
         s = Telemetry::Stream::Quat;
+    } else if (strcmp(arg, "e") == 0) {
+        s = Telemetry::Stream::Euler;
     } else if (strcmp(arg, "off") == 0) {
         s = Telemetry::Stream::Off;
     } else {
-        Serial.println("usage: stream q|off");
+        Serial.println("usage: stream q|e|off");
         return;
     }
     if (!Telemetry::setStream(s)) Serial.println("stream: control task not running");
@@ -119,6 +122,70 @@ void cmdImu()
                   b.gyro[2] * kRadToDeg);
     Serial.printf("  SFLP gravity %+.3f %+.3f %+.3f g (%lu samples)\n", b.gravity[0],
                   b.gravity[1], b.gravity[2], static_cast<unsigned long>(b.gravityCount));
+    const uint32_t dPairs = c.pairs - a.imu.pairs;
+    Serial.printf("  IMU timestamp %.2f ticks/sample (expect 48.00), dt %.1f us, dt glitches %lu\n",
+                  dPairs ? static_cast<float>(b.imuTs - a.imuTs) / dPairs : 0.0f,
+                  b.est.dt * 1e6f, static_cast<unsigned long>(c.dtGlitches));
+
+    const ControlTask::Estimate &e = b.est;
+    Serial.printf("EST: theta %+.2f deg (no comp %+.2f, SFLP %+.2f), lean %+.2f deg, %s, %s\n",
+                  e.theta * kRadToDeg, e.thetaNoComp * kRadToDeg, e.thetaSflp * kRadToDeg,
+                  e.lambda * kRadToDeg, e.ringMode ? "ring mode" : "wheel mode",
+                  e.poseValid ? "pose valid" : "POSE INVALID (axle near vertical)");
+    Serial.printf("  wheels touch for |theta| < %.1f deg (+-%.0f deg hysteresis)\n",
+                  e.thetaC * kRadToDeg, kModeHysteresisDeg);
+    Serial.printf("  theta rate %+.2f dps, turn rate %+.2f dps, heading %+.1f deg\n",
+                  e.thetaDot * kRadToDeg, e.psiDot * kRadToDeg, e.psi * kRadToDeg);
+    Serial.printf("  gyro bias %+.3f %+.3f %+.3f dps, accel trust %.2f, mounting offset %+.2f deg\n",
+                  e.bias[0] * kRadToDeg, e.bias[1] * kRadToDeg, e.bias[2] * kRadToDeg,
+                  e.accelTrust, e.mountPitch * kRadToDeg);
+}
+
+// `zero`: mounting offset so theta = 0 now, saved to NVS (spec §8.3).
+void cmdZero()
+{
+    // Refused unless Disabled: there is no balance state before Stage 5, so
+    // the robot is always Disabled here.
+    constexpr float kRadToDeg = 57.29578f;
+    ControlTask::Snapshot before;
+    if (!ControlTask::read(before)) {
+        Serial.println("zero: control task not running");
+        return;
+    }
+    float mount = 0.0f;
+    if (!ControlTask::zero(mount)) {
+        Serial.println("zero: no answer from the control task");
+        return;
+    }
+    const bool saved = Settings::saveMountPitch(mount);
+    Serial.printf("zero: theta was %+.2f deg; mounting offset %+.2f -> %+.2f deg, %s\n",
+                  before.est.theta * kRadToDeg, before.est.mountPitch * kRadToDeg,
+                  mount * kRadToDeg, saved ? "saved" : "NOT SAVED (NVS error)");
+}
+
+// `peak start` / `peak`: peak theta errors against the integrated gyro, for
+// the swing and slide tests.
+void cmdPeak(const char *arg)
+{
+    if (strcmp(arg, "start") == 0) {
+        Serial.println(ControlTask::peakStart() ? "peak: started" : "peak: control task not running");
+        return;
+    }
+    if (*arg != '\0') {
+        Serial.println("usage: peak [start]");
+        return;
+    }
+    ControlTask::Snapshot s;
+    if (!ControlTask::read(s) || !s.peak.active) {
+        Serial.println("peak: not started (peak start)");
+        return;
+    }
+    constexpr float kRadToDeg = 57.29578f;
+    const ControlTask::PeakStats &p = s.peak;
+    Serial.printf("peak over %.1f s, swing +-%.1f deg: theta %.2f deg, no comp %.2f deg, "
+                  "SFLP %.2f deg\n",
+                  p.seconds, p.swing * kRadToDeg, p.comp * kRadToDeg, p.noComp * kRadToDeg,
+                  p.sflp * kRadToDeg);
 }
 
 // `canping`: one ping on 0x7F0, then the bus status. `canping on|off`: ping
@@ -167,9 +234,14 @@ void handleLine(char *line)
         cmdStream(arg);
     } else if (strcmp(line, "imu") == 0 && *arg == '\0') {
         cmdImu();
+    } else if (strcmp(line, "zero") == 0 && *arg == '\0') {
+        cmdZero();
+    } else if (strcmp(line, "peak") == 0) {
+        cmdPeak(arg);
     } else {
         Serial.printf("unknown command: %s%s%s\n", line, *arg ? " " : "", arg);
-        Serial.println("commands: ver, imuid [n], imu, stream q|off, canping [on|off], canloop");
+        Serial.println("commands: ver, imuid [n], imu, stream q|e|off, zero, peak [start], "
+                       "canping [on|off], canloop");
     }
 }
 

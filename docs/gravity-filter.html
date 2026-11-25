@@ -1,0 +1,597 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SBR Gravity Filter</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=Space+Grotesk:wght@500;600&display=swap">
+<style>
+/* Layout: one reading column (~68ch) of an engineering notebook; figures may run a little wider. */
+:root {
+  --bg: #f5f6f3;
+  --surface: #ffffff;
+  --fg: #1c2321;
+  --muted: #5a6560;
+  --line: #cdd5d0;
+  --gyro: #2c68ad;      /* gyro path */
+  --accel: #b8621a;     /* accelerometer path, motion forces */
+  --corr: #9a3471;      /* correction feedback */
+  --code-bg: #eaede8;
+  --font-display: "Space Grotesk", "Segoe UI", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121615; --surface: #1a1f1d; --fg: #e2e7e4; --muted: #9ba6a1; --line: #303836;
+    --gyro: #74a9e4; --accel: #e39a55; --corr: #d881b6; --code-bg: #222826;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #121615; --surface: #1a1f1d; --fg: #e2e7e4; --muted: #9ba6a1; --line: #303836;
+  --gyro: #74a9e4; --accel: #e39a55; --corr: #d881b6; --code-bg: #222826;
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.6;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+main { max-width: 760px; margin: 0 auto; padding-block: 40px 72px; display: grid; gap: 8px; }
+.prose { max-width: 68ch; }
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; line-height: 1.2; margin: 0; }
+h1 { font-size: 2.2rem; font-weight: 600; letter-spacing: -0.01em; }
+h2 { font-size: 1.4rem; font-weight: 600; margin-top: 40px; padding-top: 16px; border-top: 1px solid var(--line); }
+h3 { font-size: 1.05rem; font-weight: 600; margin-top: 16px; }
+p { margin: 8px 0; }
+a { color: var(--gyro); }
+a:focus-visible { outline: 2px solid var(--corr); outline-offset: 2px; }
+.eyebrow { font-family: var(--font-mono); font-size: 0.75rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.lede { font-size: 1.1rem; color: var(--fg); }
+.muted { color: var(--muted); }
+code, .m { font-family: var(--font-mono); font-size: 0.9em; }
+code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+.eq {
+  font-family: var(--font-mono); font-size: 0.9rem; background: var(--code-bg);
+  padding: 10px 14px; border-radius: 6px; overflow-x: auto; white-space: pre; margin: 10px 0;
+}
+.gyro { color: var(--gyro); font-weight: 600; }
+.accel { color: var(--accel); font-weight: 600; }
+.corr { color: var(--corr); font-weight: 600; }
+.term { border-bottom: 1px dotted var(--muted); }
+
+.summary { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 18px; }
+.summary h2 { margin-top: 0; padding-top: 0; border-top: 0; font-size: 1.15rem; }
+
+ol.steps { padding-left: 1.4em; margin: 8px 0; display: grid; gap: 10px; }
+ol.steps li { padding-left: 4px; }
+.formula { display: block; font-family: var(--font-mono); font-size: 0.86rem; margin-top: 2px; }
+ul { padding-left: 1.3em; margin: 8px 0; }
+li { margin: 4px 0; }
+
+.table-wrap { overflow-x: auto; margin: 10px 0; }
+table { border-collapse: collapse; width: 100%; font-size: 0.93rem; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-weight: 600; color: var(--muted); font-size: 0.8rem; letter-spacing: 0.04em; text-transform: uppercase; }
+td.num { font-variant-numeric: tabular-nums; font-family: var(--font-mono); white-space: nowrap; }
+
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 10px 0; }
+.pair > div { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; min-width: 0; }
+.pair h3 { margin-top: 0; }
+@media (max-width: 560px) { .pair { grid-template-columns: 1fr; } }
+
+dl.glossary { display: grid; grid-template-columns: minmax(9rem, max-content) 1fr; gap: 6px 18px; margin: 12px 0; }
+dl.glossary dt { font-weight: 600; }
+dl.glossary dd { margin: 0; min-width: 0; }
+@media (max-width: 560px) {
+  dl.glossary { grid-template-columns: 1fr; gap: 2px; }
+  dl.glossary dd { margin-bottom: 8px; }
+}
+
+figure { margin: 16px 0; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px; }
+.fig-scroll { overflow-x: auto; }
+figure svg { display: block; width: 100%; height: auto; max-width: 100%; color: var(--fg); }
+figure svg.wide { min-width: 560px; }
+figcaption { font-size: 0.88rem; color: var(--muted); margin-top: 10px; max-width: 68ch; }
+
+/* SVG styling */
+svg .t { font-family: var(--font-body); font-size: 12px; fill: currentColor; }
+svg .ts { font-family: var(--font-mono); font-size: 10px; fill: var(--muted); }
+svg .tb { font-family: var(--font-body); font-size: 12.5px; font-weight: 600; fill: currentColor; }
+svg .ln { stroke: currentColor; stroke-width: 1.4; fill: none; }
+svg .thin { stroke: var(--muted); stroke-width: 1; fill: none; }
+svg .dash { stroke: var(--muted); stroke-width: 1.2; fill: none; stroke-dasharray: 4 4; }
+svg .box { fill: var(--surface); stroke: currentColor; stroke-width: 1.3; }
+svg .floor { stroke: var(--muted); stroke-width: 2; }
+svg .ring { stroke: currentColor; stroke-width: 4; fill: none; stroke-linecap: round; }
+svg .wheel { stroke: currentColor; stroke-width: 2; fill: var(--code-bg); }
+svg .body { fill: var(--line); stroke: currentColor; stroke-width: 1.2; }
+svg .imu { fill: var(--corr); }
+svg .dot { fill: currentColor; }
+svg .c-gyro { stroke: var(--gyro); }
+svg .c-accel { stroke: var(--accel); }
+svg .c-corr { stroke: var(--corr); }
+svg .f-gyro { fill: var(--gyro); }
+svg .f-accel { fill: var(--accel); }
+svg .f-corr { fill: var(--corr); }
+svg .f-fg { fill: currentColor; }
+svg .f-muted { fill: var(--muted); }
+svg .box.c-gyro, svg .box.c-accel, svg .box.c-corr { stroke-width: 1.8; }
+</style>
+</head>
+<body>
+
+<main>
+  <header class="prose">
+    <p class="eyebrow">SBR Mk2 · firmware stage 3 · spec §6</p>
+    <h1>How the gravity filter works</h1>
+    <p class="lede">The estimator that turns the IMU's gyro and accelerometer readings into tilt for the balance controller. It runs in the control task once per IMU sample, at 960 Hz, and is implemented in <code>firmware/src/est/GravityFilter.cpp</code>.</p>
+    <p class="muted">IMU and filtering terms are defined in the <a href="#terms">glossary</a> at the end.</p>
+  </header>
+
+  <section class="summary prose" aria-labelledby="summary">
+    <h2 id="summary">Summary</h2>
+    <ul>
+      <li><strong>State:</strong> the gravity direction in body axes, a unit vector <code>u</code>, plus the gyro bias <code>b</code>.</li>
+      <li><strong>Propagate</strong> <code>u</code> with the bias-corrected <span class="gyro">gyro</span> rate.</li>
+      <li><strong>Correct</strong> it towards the gravity direction measured by the <span class="accel">accelerometer</span>, through a <span class="corr">PI law</span>. The P term (k_p = 1 rad/s) removes tilt error; the I term (k_i = 0.1 rad/s²) estimates the gyro bias.</li>
+      <li>Before it's used, the accelerometer reading has the <strong>robot's own motion subtracted</strong> (rigid-body lever-arm terms and pivot acceleration). It is also <strong>weighted by how close its magnitude is to 1 g</strong>.</li>
+      <li>In one axis this is a <strong>complementary filter</strong> with a crossover near 0.16 Hz: gyro above it, accelerometer below.</li>
+    </ul>
+  </section>
+
+  <h2>The problem</h2>
+  <div class="prose">
+    <p>The IMU (an LSM6DSV16X on the controller board) contains two sensors, sampled together at 960 Hz. Neither can give tilt on its own.</p>
+  </div>
+  <div class="pair">
+    <div>
+      <h3 class="gyro">Gyro: angular rate ω</h3>
+      <p>Measures rotation rate about the three body axes. Integrating it gives the change in orientation, with very little noise and no lag.</p>
+      <p class="muted">Every gyro has a slowly varying offset, the <em>bias</em>. Integration turns that into a growing angle error (<em>drift</em>): 0.02 rad/s of bias is 1.15° per second. The gyro is good at high frequencies and useless at DC.</p>
+    </div>
+    <div>
+      <h3 class="accel">Accelerometer: specific force f</h3>
+      <p>An accelerometer doesn't measure acceleration. It measures <em>specific force</em>, <code>f = a − g</code>: acceleration minus the gravity vector. At rest it reads 1 g pointing <em>up</em>; in free fall it reads zero. So when the sensor isn't accelerating, f gives the up direction directly, with no drift.</p>
+      <p class="muted">Any real acceleration of the sensor point adds to that reading and tilts the apparent "up". The accelerometer is good at DC and corrupted at higher frequencies.</p>
+    </div>
+  </div>
+  <div class="prose">
+    <p>Their error spectra are complementary, so the standard approach is to blend them: trust the gyro for fast changes and the accelerometer for the slow average. This filter does that. It also reduces the accelerometer's corruption by predicting and subtracting the acceleration it can work out from the gyro and the geometry.</p>
+  </div>
+
+  <h2>State and outputs</h2>
+  <div class="prose">
+    <p>Body axes: x forward, y along the axle to the left, z up (right-handed). The filter's main state is <code>u</code>, world "up" expressed in body axes, kept at unit length. Tilt θ is rotation about +y, positive when the top leans forward:</p>
+  </div>
+
+  <figure>
+    <svg viewBox="0 0 360 320" role="img" aria-label="Side view of the robot tilted 15 degrees forward. The body z axis leans forward from the world-up direction u by the tilt angle theta. The IMU sits on the body 56.5 mm above the axle; the elliptical ring surrounds the wheel.">
+      <defs>
+        <marker id="aA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-fg"/></marker>
+        <marker id="aAm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-muted"/></marker>
+      </defs>
+      <line x1="20" y1="296" x2="340" y2="296" class="floor"/>
+      <line x1="170" y1="249.6" x2="170" y2="80" class="dash" marker-end="url(#aAm)"/>
+      <text x="164" y="76" class="t" text-anchor="end">u = world up</text>
+      <g transform="translate(170 249.6) rotate(15)">
+        <circle cx="0" cy="0" r="52.8" class="dash"/>
+        <circle cx="0" cy="0" r="46.4" class="wheel"/>
+        <path d="M 39.8 34.8 A 108 120 0 1 0 -39.8 34.8" class="ring"/>
+        <rect x="-13" y="-104" width="26" height="110" rx="5" class="body"/>
+        <circle cx="0" cy="0" r="3.5" class="dot"/>
+        <rect x="-5" y="-95.4" width="10" height="10" rx="1.5" class="imu"/>
+        <circle cx="0" cy="-76.8" r="2.5" class="f-muted"/>
+        <line x1="0" y1="0" x2="0" y2="-168" class="ln" marker-end="url(#aA)"/>
+        <line x1="0" y1="0" x2="78" y2="0" class="ln" marker-end="url(#aA)"/>
+      </g>
+      <text x="219" y="84" class="t">z body</text>
+      <text x="252" y="282" class="t">x body (forward)</text>
+      <path d="M 170 99.6 A 150 150 0 0 1 208.8 104.7" class="ln c-corr" style="stroke-width:1.6"/>
+      <text x="184" y="95" class="tb" style="fill:var(--corr)">θ</text>
+      <text x="203" y="166" class="t">IMU</text>
+      <text x="62" y="258" class="t">wheel</text>
+      <text x="300" y="150" class="t">ring</text>
+      <text x="20" y="290" class="ts">floor</text>
+    </svg>
+    <figcaption>Robot at θ = 15°, to scale. The IMU (purple) is 56.5 mm above the axle. The ring is an ellipse with a 66 mm cut-out around the axle (dashed).</figcaption>
+  </figure>
+
+  <div class="prose">
+    <p><strong>Why a vector rather than angles or a quaternion.</strong> Euler angles (roll/pitch/yaw) have <span class="term">singularities</span>, poses where the representation breaks down; this robot passes through all of them because it goes upside down. A quaternion avoids that, but it also carries heading. Heading can't be corrected without a magnetometer, so the filter would be carrying a state it can't observe. The up-vector holds exactly the two degrees of freedom gravity can observe (tilt and side lean), and is valid at every pose. Angles are computed from it only at the output.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Output</th><th>Definition</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td>Tilt θ</td><td class="num">atan2(−u_x, u_z)</td><td>Range (−180°, 180°]; 180° is upside down</td></tr>
+        <tr><td>Tilt rate θ̇</td><td class="num">ω_y</td><td>Bias-corrected gyro; no filter lag</td></tr>
+        <tr><td>Side lean λ</td><td class="num">asin(u_y)</td><td></td></tr>
+        <tr><td>Turn rate ψ̇</td><td class="num">ω · u</td><td>Rate about world vertical; valid upright and inverted</td></tr>
+        <tr><td>Heading ψ</td><td class="num">∫ ψ̇ dt</td><td>Open-loop integral: drifts, reset when balancing starts</td></tr>
+        <tr><td>Pose valid</td><td class="num">|u_y| ≤ sin 60°</td><td>False when the axle is near vertical and θ is ill-defined</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>Propagation: what the gyro does</h2>
+  <div class="prose">
+    <p>World up is fixed in the world. Seen from a body rotating at ω, a world-fixed vector rotates at −ω:</p>
+    <div class="eq">du/dt = −ω × u</div>
+    <p>The filter integrates this with one Euler step per sample, then renormalizes <code>u</code> to unit length so rounding can't change its length:</p>
+    <div class="eq">u ← normalize(u − dt · (ω × u))</div>
+    <p>dt is taken from the IMU's own sample timestamps (48 ticks of its internal clock per sample, scaled by the chip's measured clock error). A late or skipped sample is therefore integrated over the right interval. Run on its own, this step tracks motion perfectly apart from the integrated bias, which is what the correction removes.</p>
+  </div>
+
+  <h2>One update</h2>
+  <figure>
+    <div class="fig-scroll">
+    <svg class="wide" viewBox="0 0 840 480" role="img" aria-label="Block diagram of one filter update. The gyro minus the bias, plus the correction, propagates u. The gyro is differentiated to angular acceleration, which with u predicts the motion force. The accelerometer minus that prediction is normalised to the measured up direction; the error between measured and estimated up, weighted by trust, feeds back into the rate (gain k_p) and into the bias (gain k_i).">
+      <defs>
+        <marker id="bA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-fg"/></marker>
+        <marker id="bG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-gyro"/></marker>
+        <marker id="bX" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-accel"/></marker>
+        <marker id="bC" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-corr"/></marker>
+      </defs>
+
+      <rect x="20" y="120" width="110" height="40" rx="5" class="box c-gyro"/>
+      <text x="75" y="145" class="tb" text-anchor="middle">gyro ω_m</text>
+      <line x1="130" y1="140" x2="196" y2="140" class="ln c-gyro" marker-end="url(#bG)"/>
+      <circle cx="210" cy="140" r="13" class="box"/>
+      <text x="210" y="144.5" class="t" text-anchor="middle">Σ</text>
+      <line x1="223" y1="140" x2="316" y2="140" class="ln c-gyro" marker-end="url(#bG)"/>
+      <text x="248" y="132" class="t">ω</text>
+      <circle cx="330" cy="140" r="13" class="box"/>
+      <text x="330" y="144.5" class="t" text-anchor="middle">Σ</text>
+      <line x1="343" y1="140" x2="379" y2="140" class="ln c-gyro" marker-end="url(#bG)"/>
+      <text x="350" y="132" class="t">ω_c</text>
+      <rect x="380" y="120" width="180" height="40" rx="5" class="box c-gyro"/>
+      <text x="470" y="137" class="tb" text-anchor="middle">propagate u</text>
+      <text x="470" y="152" class="ts" text-anchor="middle">u ← u − dt·(ω_c × u)</text>
+      <line x1="560" y1="140" x2="639" y2="140" class="ln" marker-end="url(#bA)"/>
+      <text x="575" y="132" class="t">u</text>
+      <rect x="640" y="120" width="180" height="40" rx="5" class="box"/>
+      <text x="730" y="137" class="tb" text-anchor="middle">outputs</text>
+      <text x="730" y="152" class="ts" text-anchor="middle">θ, θ̇, λ, ψ̇, ψ</text>
+
+      <rect x="150" y="20" width="120" height="40" rx="5" class="box c-corr"/>
+      <text x="210" y="37" class="tb" text-anchor="middle">gyro bias b</text>
+      <text x="210" y="52" class="ts" text-anchor="middle">clamped ±0.1 rad/s</text>
+      <line x1="210" y1="60" x2="210" y2="126" class="ln c-corr" marker-end="url(#bC)"/>
+      <text x="216" y="100" class="t">−b</text>
+
+      <circle cx="270" cy="140" r="3" class="dot" style="fill:var(--gyro)"/>
+      <line x1="270" y1="140" x2="270" y2="219" class="ln c-gyro" marker-end="url(#bG)"/>
+      <rect x="150" y="220" width="140" height="40" rx="5" class="box"/>
+      <text x="220" y="237" class="tb" text-anchor="middle">angular accel α</text>
+      <text x="220" y="252" class="ts" text-anchor="middle">dω/dt, 1st-order 40 Hz</text>
+      <line x1="290" y1="240" x2="329" y2="240" class="ln" marker-end="url(#bA)"/>
+      <text x="303" y="232" class="t">α</text>
+      <rect x="330" y="220" width="200" height="40" rx="5" class="box c-accel"/>
+      <text x="430" y="237" class="tb" text-anchor="middle">predict motion force</text>
+      <text x="430" y="252" class="ts" text-anchor="middle">a_ref + α×r + ω×(ω×r)</text>
+      <text x="430" y="210" class="ts" text-anchor="middle">uses r_imu, contact mode, ring shape</text>
+
+      <circle cx="600" cy="140" r="3" class="dot"/>
+      <polyline points="600,140 600,320 700,320 700,359" class="ln" marker-end="url(#bA)"/>
+      <circle cx="600" cy="240" r="3" class="dot"/>
+      <line x1="600" y1="240" x2="531" y2="240" class="ln" marker-end="url(#bA)"/>
+      <text x="607" y="200" class="t">u</text>
+
+      <rect x="20" y="360" width="110" height="40" rx="5" class="box c-accel"/>
+      <text x="75" y="385" class="tb" text-anchor="middle">accel f_m</text>
+      <line x1="130" y1="380" x2="416" y2="380" class="ln c-accel" marker-end="url(#bX)"/>
+      <text x="260" y="372" class="t">f_m</text>
+      <line x1="430" y1="260" x2="430" y2="366" class="ln c-accel" marker-end="url(#bX)"/>
+      <text x="437" y="320" class="t">−f_pred</text>
+      <circle cx="430" cy="380" r="13" class="box"/>
+      <text x="430" y="384.5" class="t" text-anchor="middle">Σ</text>
+      <line x1="443" y1="380" x2="469" y2="380" class="ln c-accel" marker-end="url(#bX)"/>
+      <rect x="470" y="360" width="100" height="40" rx="5" class="box"/>
+      <text x="520" y="385" class="tb" text-anchor="middle">û = d / |d|</text>
+      <line x1="570" y1="380" x2="619" y2="380" class="ln" marker-end="url(#bA)"/>
+      <text x="589" y="372" class="t">û</text>
+      <rect x="620" y="360" width="180" height="40" rx="5" class="box c-corr"/>
+      <text x="710" y="385" class="tb" text-anchor="middle">error e = û × u</text>
+
+      <circle cx="455" cy="380" r="3" class="dot" style="fill:var(--accel)"/>
+      <polyline points="455,380 455,448 469,448" class="ln c-accel" marker-end="url(#bX)"/>
+      <rect x="470" y="430" width="100" height="36" rx="5" class="box"/>
+      <text x="520" y="453" class="tb" text-anchor="middle">trust w</text>
+      <polyline points="570,448 720,448 720,401" class="ln" marker-end="url(#bA)"/>
+      <text x="640" y="441" class="t">w (0…1)</text>
+
+      <polyline points="800,380 826,380 826,95 290,95 290,40 271,40" class="ln c-corr" marker-end="url(#bC)"/>
+      <circle cx="330" cy="95" r="3" class="dot" style="fill:var(--corr)"/>
+      <line x1="330" y1="95" x2="330" y2="126" class="ln c-corr" marker-end="url(#bC)"/>
+      <text x="700" y="88" class="t" style="fill:var(--corr)">w · e</text>
+      <text x="337" y="114" class="t" style="fill:var(--corr)">× k_p</text>
+      <text x="296" y="70" class="t" style="fill:var(--corr)">× k_i·dt</text>
+    </svg>
+    </div>
+    <figcaption><span class="gyro">Blue</span>: gyro path (propagation). <span class="accel">Orange</span>: accelerometer path with the predicted motion removed; d = f_m − f_pred. <span class="corr">Purple</span>: PI correction. The proportional part adds to the rate; the integral part is the bias estimate.</figcaption>
+  </figure>
+
+  <ol class="steps prose">
+    <li><strong>Bias-correct the gyro.</strong>
+      <span class="formula">ω = ω_m − b</span></li>
+    <li><strong>Predict the non-gravity specific force at the IMU</strong> from the body's motion. This is the part of the accelerometer reading that isn't gravity. See <a href="#lever">lever-arm compensation</a>.
+      <span class="formula">f_pred = a_ref + α × r + ω × (ω × r)</span></li>
+    <li><strong>Measured up direction:</strong> remove the prediction; what remains should be gravity's specific force, 1 g up.
+      <span class="formula">d = f_m − f_pred,   û = d / |d|</span></li>
+    <li><strong>Accelerometer trust:</strong> a magnitude check on d (see <a href="#trust">below</a>).
+      <span class="formula">w = clamp(1 − | |d| − g | / 0.2g, 0, 1)</span></li>
+    <li><strong>Error:</strong> the cross product of measured and estimated up. For small errors it's the rotation vector that takes u onto û: its direction is the rotation axis and its magnitude is sin of the angle between them.
+      <span class="formula">e = û × u</span></li>
+    <li><strong>PI correction:</strong> the proportional term goes into the rate used for propagation, and the integral term updates the bias.
+      <span class="formula">ω_c = ω + k_p·w·e,    b ← clamp(b − k_i·w·e·dt, ±0.1 rad/s)</span></li>
+    <li><strong>Propagate</strong> with the corrected rate.
+      <span class="formula">u ← normalize(u − dt·(ω_c × u))</span></li>
+  </ol>
+
+  <h2>The correction law and its tuning</h2>
+  <figure>
+    <svg viewBox="0 0 320 210" role="img" aria-label="The estimate u is 25 degrees from the measured direction u-hat. The error e equals u-hat cross u and points along the axle; adding k_p times e to the rate rotates u toward u-hat.">
+      <defs>
+        <marker id="cA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-fg"/></marker>
+        <marker id="cX" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-accel"/></marker>
+        <marker id="cC" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-corr"/></marker>
+      </defs>
+      <line x1="160" y1="180" x2="160" y2="52" class="ln c-accel" style="stroke-width:2" marker-end="url(#cX)"/>
+      <text x="152" y="52" class="t" text-anchor="end">û measured</text>
+      <line x1="160" y1="180" x2="213.8" y2="64.6" class="ln" style="stroke-width:2" marker-end="url(#cA)"/>
+      <text x="220" y="66" class="t">u estimate</text>
+      <path d="M 204.4 84.8 A 105 105 0 0 0 171 75.6" class="ln c-corr" style="stroke-width:1.6" marker-end="url(#cC)"/>
+      <text x="214" y="104" class="t" style="fill:var(--corr)">k_p·w·e rotates u</text>
+      <text x="214" y="119" class="t" style="fill:var(--corr)">toward û</text>
+      <circle cx="160" cy="180" r="7" class="box"/>
+      <circle cx="160" cy="180" r="2.2" class="dot"/>
+      <text x="173" y="194" class="t">e = û × u, along the axle (out of the page)</text>
+    </svg>
+    <figcaption>Adding k_p·e to the rate makes u rotate towards û at a rate proportional to the angle between them.</figcaption>
+  </figure>
+
+  <div class="prose">
+    <p><strong>Error dynamics.</strong> Linearise about a pose, in the tilt axis only. Let x be the tilt error and β the true gyro bias, and assume full trust. Then:</p>
+    <div class="eq">ẋ = (β − b) − k_p·x        ḃ = k_i·x
+⇒  ẍ + k_p·ẋ + k_i·x = 0</div>
+    <p>With k_p = 1 rad/s and k_i = 0.1 rad/s² the poles are at −0.11 and −0.89 rad/s:</p>
+    <ul>
+      <li>the fast pole (τ ≈ 1.1 s) pulls a tilt error out;</li>
+      <li>the slow pole (τ ≈ 9 s) is the bias being learned.</li>
+    </ul>
+    <p>A constant gyro bias produces a transient tilt error that peaks at roughly β/k_p, then decays to zero as b converges to β. The spec's starting value, k_i = 0.01, puts the slow pole at −0.01 rad/s (τ ≈ 100 s). That leaves 0.86° of error 30 s after a 0.02 rad/s bias appears, against a requirement of 0.2°, so k_i was raised to 0.1.</p>
+
+    <p id="comp"><strong>Complementary-filter view.</strong> Treat the accelerometer-derived tilt θ_a as an input alongside the gyro rate. The same loop gives:</p>
+    <div class="eq">θ̂(s) =   s² / (s² + k_p·s + k_i)        · ω(s)/s      gyro, integrated
+       + (k_p·s + k_i) / (s² + k_p·s + k_i) · θ_a(s)      accelerometer</div>
+    <p>The two transfer functions sum to 1, which is what makes it a complementary filter. The gyro is high-passed and the accelerometer low-passed, crossing over near k_p = 1 rad/s (0.16 Hz). Accelerometer disturbances faster than about a second are heavily attenuated. Gyro errors slower than that, including bias (handled by the integrator), are removed. The control loop's tilt rate θ̇ is the raw bias-corrected gyro, so it has no filter lag at all.</p>
+
+    <p><strong>Yaw bias is unobservable.</strong> Rotation about the gravity vector doesn't change <code>u</code>, so e never has a component along u and the bias about the vertical is never corrected. Heading ψ is therefore an open-loop integral and drifts.</p>
+  </div>
+
+  <h2 id="trust">Accelerometer trust weighting</h2>
+  <figure>
+    <svg viewBox="0 0 360 178" role="img" aria-label="Trust w against the magnitude of the motion-corrected accelerometer reading: 1 at exactly 1 g, falling linearly to 0 at 0.8 g and 1.2 g, and 0 outside that band.">
+      <line x1="30" y1="130" x2="335" y2="130" class="thin"/>
+      <line x1="30" y1="22" x2="30" y2="130" class="thin"/>
+      <line x1="30" y1="30" x2="335" y2="30" class="dash" style="stroke-width:0.8"/>
+      <g class="ts">
+        <text x="40" y="146" text-anchor="middle">0.6 g</text>
+        <text x="110" y="146" text-anchor="middle">0.8 g</text>
+        <text x="180" y="146" text-anchor="middle">1.0 g</text>
+        <text x="250" y="146" text-anchor="middle">1.2 g</text>
+        <text x="320" y="146" text-anchor="middle">1.4 g</text>
+        <text x="24" y="133" text-anchor="end">0</text>
+        <text x="24" y="33" text-anchor="end">1</text>
+      </g>
+      <line x1="110" y1="130" x2="110" y2="134" class="thin"/>
+      <line x1="180" y1="130" x2="180" y2="134" class="thin"/>
+      <line x1="250" y1="130" x2="250" y2="134" class="thin"/>
+      <polyline points="40,130 110,130 180,30 250,130 320,130" class="ln c-accel" style="stroke-width:2.2"/>
+      <text x="188" y="24" class="t">|d| = 1 g: full trust</text>
+      <text x="262" y="118" class="t">gyro only</text>
+      <text x="44" y="118" class="t">gyro only</text>
+      <text x="180" y="170" class="t" text-anchor="middle">|d| = |f_m − f_pred|</text>
+      <text x="10" y="84" class="tb" style="fill:var(--accel)">w</text>
+    </svg>
+    <figcaption>w scales both the P and I terms. Unmodelled acceleration (impacts, pushes, and driving until wheel odometry is available) usually changes the magnitude of d as well as its direction. Gating on |d| therefore stops the correction during exactly those moments, and the gyro runs open-loop through them.</figcaption>
+  </figure>
+  <p class="prose muted">This is a heuristic. An acceleration perpendicular to gravity changes the magnitude only to second order, so a sustained sideways acceleration can still get through partly. That case is what the motion prediction below is for.</p>
+
+  <h2 id="lever">Lever-arm compensation</h2>
+  <div class="prose">
+    <p>The IMU is 56.5 mm above the axle, so when the body pitches, the sensor moves on an arc. For a rigid body, the acceleration of a point P at offset r from a reference point O is:</p>
+    <div class="eq">a_P = a_O + α × r + ω × (ω × r)
+      pivot    tangential   centripetal</div>
+    <p>The filter evaluates this with ω and α from the gyro and adds the pivot's own acceleration a_ref. The result, f_pred, is subtracted from the accelerometer reading before the reading is used as a gravity measurement. Without this step, swinging the body would show up as a tilt error.</p>
+  </div>
+  <figure>
+    <svg viewBox="0 0 380 252" role="img" aria-label="The body pitches about the axle. At the IMU, 56.5 mm up, the angular acceleration gives a tangential term alpha cross r and the rate gives a centripetal term toward the axle, both added to the gravity reading.">
+      <defs>
+        <marker id="eA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-fg"/></marker>
+        <marker id="eX" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-accel"/></marker>
+      </defs>
+      <path d="M 132.1 98.4 A 140 140 0 0 1 227.9 98.4" class="dash"/>
+      <line x1="180" y1="230" x2="204.3" y2="92.1" class="ln" style="stroke-width:5;stroke:var(--line)"/>
+      <line x1="180" y1="230" x2="204.3" y2="92.1" class="ln"/>
+      <circle cx="180" cy="230" r="5" class="dot"/>
+      <text x="190" y="246" class="t">axle (pivot)</text>
+      <rect x="198.3" y="86.1" width="12" height="12" rx="2" class="imu"/>
+      <line x1="204.3" y1="92.1" x2="204.3" y2="16" class="ln" marker-end="url(#eA)"/>
+      <text x="211" y="24" class="t">gravity term: 1 g up</text>
+      <line x1="210" y1="93" x2="276" y2="104.6" class="ln c-accel" style="stroke-width:2" marker-end="url(#eX)"/>
+      <text x="281" y="104" class="t">α × r</text>
+      <text x="281" y="118" class="ts">tangential</text>
+      <line x1="203.5" y1="99" x2="196.8" y2="137" class="ln c-accel" style="stroke-width:2" marker-end="url(#eX)"/>
+      <text x="203" y="152" class="t">ω × (ω × r)</text>
+      <text x="203" y="166" class="ts">centripetal</text>
+      <text x="174" y="180" class="t" text-anchor="end">r = 56.5 mm</text>
+      <text x="126" y="92" class="ts" text-anchor="end">swing</text>
+    </svg>
+    <figcaption>Pitching about the axle (angle exaggerated). Both orange terms are computable from the gyro, so they can be predicted and removed.</figcaption>
+  </figure>
+  <div class="prose">
+    <p><strong>Angular acceleration.</strong> The gyro gives ω, not α. α is the sample-to-sample difference of ω divided by dt, passed through a first-order low-pass at 40 Hz. Raw differencing would amplify gyro noise by roughly 1/dt. The low-pass costs about 4 ms of lag, which is small against the body's motion (a few Hz).</p>
+    <p><strong>Effect.</strong> In simulation with the real geometry, swinging ±10° at 1.5 Hz about the axle gives a peak tilt error of 0.79° without compensation and 0.06° with it.</p>
+  </div>
+
+  <h2>Pivot and contact mode: wheels or rings</h2>
+  <div class="prose">
+    <p>The pivot O, and its acceleration a_ref, depend on what's touching the floor. The filter tracks this as the <span class="term">contact mode</span>, decided from θ.</p>
+  </div>
+  <figure>
+    <div class="fig-scroll">
+    <svg class="wide" viewBox="0 0 680 300" role="img" aria-label="Left: at 20.3 degrees the wheel and the front corner of the ring cut-out both touch the floor. Right: at 60 degrees the robot rests on the elliptical ring, the wheels are in the air, and the ring centre is h of theta above the floor.">
+      <defs>
+        <marker id="fA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-corr"/></marker>
+      </defs>
+      <line x1="10" y1="270" x2="670" y2="270" class="floor"/>
+
+      <g transform="translate(150 223.6) rotate(20.3)">
+        <circle cx="0" cy="0" r="52.8" class="dash"/>
+        <circle cx="0" cy="0" r="46.4" class="wheel"/>
+        <path d="M 39.8 34.8 A 108 120 0 1 0 -39.8 34.8" class="ring"/>
+        <rect x="-13" y="-104" width="26" height="110" rx="5" class="body"/>
+        <circle cx="0" cy="0" r="3.5" class="dot"/>
+        <rect x="-5" y="-95.4" width="10" height="10" rx="1.5" class="imu"/>
+        <circle cx="0" cy="-76.8" r="2.5" class="f-muted"/>
+      </g>
+      <circle cx="150" cy="270" r="4" class="f-corr"/>
+      <circle cx="175.2" cy="270" r="4" class="f-corr"/>
+      <text x="150" y="292" class="t" text-anchor="middle">θ = 20.3°: wheel and ring corner both touch</text>
+
+      <g transform="translate(480 197.3) rotate(60)">
+        <circle cx="0" cy="0" r="52.8" class="dash"/>
+        <circle cx="0" cy="0" r="46.4" class="wheel"/>
+        <path d="M 39.8 34.8 A 108 120 0 1 0 -39.8 34.8" class="ring"/>
+        <rect x="-13" y="-104" width="26" height="110" rx="5" class="body"/>
+        <circle cx="0" cy="0" r="3.5" class="dot"/>
+        <rect x="-5" y="-95.4" width="10" height="10" rx="1.5" class="imu"/>
+        <circle cx="0" cy="-76.8" r="2.5" class="f-muted"/>
+      </g>
+      <circle cx="535.8" cy="270" r="4" class="f-corr"/>
+      <line x1="546.5" y1="268" x2="546.5" y2="163" class="ln c-corr" marker-end="url(#fA)" marker-start="url(#fA)"/>
+      <text x="553" y="222" class="tb" style="fill:var(--corr)">h(θ)</text>
+      <text x="415" y="262" class="ts" text-anchor="middle">wheel in the air</text>
+      <text x="500" y="292" class="t" text-anchor="middle">θ = 60°: on the ring, wheels in the air</text>
+    </svg>
+    </div>
+    <figcaption>To scale from CAD: ring ellipse 135 × 150 mm with a 66 mm circle cut out around the axle; wheel radius 29 mm; ring centre 48 mm above the axle. Purple dots are floor contacts.</figcaption>
+  </figure>
+  <div class="prose">
+    <p>The wheels touch the floor while <code>d_c·cos θ + r_w ≥ h(θ)</code>, where h(θ) is the ring centre's height above the floor (defined below). For this geometry that holds for |θ| &lt; θ_c ≈ 20.3°. The mode switches at θ_c with ±2° hysteresis.</p>
+  </div>
+  <div class="pair">
+    <div>
+      <h3>Wheel mode, |θ| &lt; θ_c</h3>
+      <p>Pivot: the axle. r = r_imu = (0, 0, 56.5 mm).</p>
+      <p>a_ref is the axle's acceleration: v̇·h + v·ψ̇·(u × h). Here v is the ground speed from the wheel encoders and h is the horizontal forward direction in body axes. The second term is the centripetal acceleration of a turn.</p>
+      <p class="muted">Until the drivers report wheel speed (stage 4), v = 0. That's exact for the stage 3 swing test, where the wheels are held.</p>
+    </div>
+    <div>
+      <h3>Ring mode, |θ| &gt; θ_c</h3>
+      <p>Pivot: the ring centre. r = r_imu − (0, 0, d_c) = (0, 0, 8.5 mm).</p>
+      <p>a_ref comes from rolling without slip on a non-circular ring (below).</p>
+    </div>
+  </div>
+  <div class="prose">
+    <p><strong>Rolling kinematics.</strong> For a convex shape rolling on a flat floor, define h(θ) as the height of the reference point (here the ring centre) above the floor at tilt θ. In geometry this is the shape's <span class="term">support function</span>. With no slip, the contact point is the instantaneous centre of rotation. The centre therefore moves forward at h·θ̇ and vertically at h′·θ̇, which gives:</p>
+    <div class="eq">a_ref = (h·θ̈ + h′·θ̇²) · forward  +  (h′·θ̈ + h″·θ̇²) · up</div>
+    <p>with θ̇ = ω_y and θ̈ = α_y. For a circle of radius R this reduces to R·θ̈ forward. For the ellipse, with half-width a = 67.5 mm and half-height b = 75 mm:</p>
+    <div class="eq">h(θ) = √(a²·sin²θ + b²·cos²θ)       75 mm on the ends, 67.5 mm on the sides</div>
+    <p>Near upright, the ellipse's lowest point falls inside the 66 mm cut-out. The ring then rests on one of the two corners the cut leaves (25 mm ahead of or behind the axle, 22 mm below it), and h becomes that corner's height. That's a fixed point pivoting, so h″ = −h. The firmware picks whichever case applies at each θ.</p>
+    <p><strong>Effect.</strong> Rolling ±40° at 0.8 Hz on the rings, in simulation, gives a peak error of 1.87° without compensation and 0.12° with it.</p>
+  </div>
+
+  <h2>Mounting alignment: <code>zero</code></h2>
+  <div class="prose">
+    <p>The IMU board may be fitted a little rotated in pitch relative to the body frame defined by the CAD. The console command <code>zero</code> measures and stores that offset:</p>
+    <ol class="steps">
+      <li>Hold the robot in the reference pose (ring centre directly above the axle) and run <code>zero</code>.</li>
+      <li>The current θ is added to a stored mounting angle, which is saved in flash.</li>
+      <li>From then on, every gyro, accelerometer and SFLP vector is rotated about y by that angle before it enters the filter. The filter state is rotated by the same increment at that moment, so the output doesn't jump.</li>
+    </ol>
+    <p class="muted">Pitch only. It corrects sensor alignment, not the balance point: if the centre of mass isn't exactly on the axle-to-ring-centre line, that offset is the controller's to find.</p>
+  </div>
+
+  <h2>Relation to the Mahony filter</h2>
+  <div class="prose">
+    <p>This is a variant of the <span class="term">Mahony filter</span> (Mahony, Hamel and Pflimlin, 2008). It's the standard explicit complementary filter for attitude: a cross-product error between measured and estimated reference directions, fed back through a PI law into the rate that drives the attitude integration. The correction step above is exactly Mahony's. The differences:</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Textbook Mahony</th><th>Here</th><th>Reason</th></tr></thead>
+      <tbody>
+        <tr><td>Integrates a full attitude quaternion</td><td>Integrates only the gravity vector u; heading integrated separately</td><td>No magnetometer, so heading is unobservable. The vector form has no singularity, and the robot runs inverted.</td></tr>
+        <tr><td>Treats the accelerometer as a pure gravity sensor</td><td>Subtracts predicted rigid-body and pivot acceleration first</td><td>The IMU is off the pivot: 0.79° → 0.06° (swing), 1.87° → 0.12° (rolling)</td></tr>
+        <tr><td>Constant correction gain</td><td>Gain scaled by trust w from |d|</td><td>Suppresses correction during unmodelled acceleration; a common extension</td></tr>
+        <tr><td>Unbounded integrator</td><td>Bias clamped to ±0.1 rad/s per axis</td><td>Anti-windup during long disturbances</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="prose">
+    <p><strong>Why not something else?</strong> The common alternatives are the Madgwick filter (gradient-descent correction, otherwise similar) and an extended Kalman filter. The EKF would need process and measurement noise covariances to be modelled and tuned. Its gains would vary with that model, and it costs considerably more per sample. For a two-degree-of-freedom gravity problem at 960 Hz, Mahony gives the same structure (fast gyro path, slow accelerometer correction, bias estimation) with two gains whose effect is easy to understand.</p>
+  </div>
+
+  <h2>Limitations</h2>
+  <ul class="prose">
+    <li><strong>Heading drifts.</strong> No absolute yaw reference.</li>
+    <li><strong>Yaw-axis bias isn't estimated</strong> (unobservable from gravity).</li>
+    <li><strong>Unmodelled acceleration</strong> (impacts, and driving until wheel odometry arrives in stage 4) is handled only by the trust weighting.</li>
+    <li><strong>Tilt accuracy depends on geometry accuracy.</strong> r_imu, d_c and the ring shape come from CAD; wrong values make the compensation subtract the wrong force.</li>
+  </ul>
+  <p class="prose">The IMU's on-chip fusion (SFLP) runs alongside. Its gravity vector gives an independent tilt that is logged as a cross-check and never used for control.</p>
+
+  <h2>Verification</h2>
+  <div class="prose"><p>Host unit tests (spec §6.3) on simulated sensor data with the robot's real geometry. All pass:</p></div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Test</th><th>Limit</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>Static poses 0, ±10, ±90, ±179, 180°, side lean 0 and 20°, initialised 5° off</td><td class="num">&lt; 0.05°</td><td>Pass</td></tr>
+        <tr><td>Constant rotation through full turns, inverted included</td><td class="num">&lt; 0.1°</td><td>Pass</td></tr>
+        <tr><td>Gyro bias 0.02 rad/s, error at 30 s</td><td class="num">&lt; 0.2°</td><td>Pass</td></tr>
+        <tr><td>Swing about the axle, ±10° at 1.5 Hz, peak error</td><td class="num">&lt; 0.5°</td><td class="num">0.06° (0.79° uncompensated)</td></tr>
+        <tr><td>Rolling on the rings, ±40° at 0.8 Hz, peak error</td><td class="num">&lt; 0.5°</td><td class="num">0.12° (1.87° uncompensated)</td></tr>
+        <tr><td>Ring support function vs brute-force search of the cut ellipse, full circle</td><td class="num">2 µm</td><td>Pass</td></tr>
+        <tr><td>θ crossing ±180° without a discontinuity</td><td class="num">—</td><td>Pass</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="prose muted">Hardware acceptance still to do (stage 3): angle jig error ≤ 0.5° at every test angle including 180°, and swing-test peak error with compensation ≤ 1° and below SFLP's.</p>
+
+  <h2 id="terms">Glossary</h2>
+  <dl class="glossary">
+    <dt>IMU</dt><dd>Inertial measurement unit: a gyro and accelerometer in one package. Here an ST LSM6DSV16X, sampled at 960 Hz (its output data rate, ODR).</dd>
+    <dt>Specific force</dt><dd>What an accelerometer actually measures: acceleration minus gravity, f = a − g. It reads +1 g up at rest and zero in free fall.</dd>
+    <dt>Bias</dt><dd>A slowly varying offset in a sensor's output. For a gyro, a non-zero reading when stationary.</dd>
+    <dt>Drift</dt><dd>The growing orientation error from integrating a biased rate.</dd>
+    <dt>Attitude</dt><dd>Orientation relative to the world, especially relative to gravity (tilt and side lean). Heading is the remaining degree of freedom.</dd>
+    <dt>Body / world frame</dt><dd>Axes fixed to the robot versus axes fixed to the ground. The filter works in body axes.</dd>
+    <dt>Euler angles</dt><dd>Orientation as three successive rotations (roll, pitch, yaw). They have singularities ("gimbal lock"), where two rotations line up and the angles become undefined or jump.</dd>
+    <dt>Quaternion</dt><dd>A four-number representation of full 3D orientation with no singularities. Standard for attitude filters that also track heading.</dd>
+    <dt>Observability</dt><dd>Whether a state can be inferred from the measurements. Rotation about gravity isn't observable from an accelerometer, so heading and yaw-axis bias aren't.</dd>
+    <dt>Complementary filter</dt><dd>Fuses two sensors with complementary error spectra: a high-pass on one plus a low-pass on the other, summing to 1.</dd>
+    <dt>Mahony filter</dt><dd>A nonlinear complementary filter for attitude using a cross-product error and PI feedback into the gyro rate (Mahony, Hamel, Pflimlin, 2008).</dd>
+    <dt>Madgwick filter</dt><dd>A similar attitude filter that corrects by gradient descent instead of a cross-product error.</dd>
+    <dt>EKF</dt><dd>Extended Kalman filter: a model-based estimator that weights sensors by modelled noise covariances. More general, more to tune.</dd>
+    <dt>Lever-arm compensation</dt><dd>Removing the accelerometer reading caused by the sensor being offset from the point the body rotates about.</dd>
+    <dt>Accelerometer gating / trust</dt><dd>Reducing the accelerometer's weight when its magnitude shows it isn't measuring gravity alone.</dd>
+    <dt>Support function</dt><dd>For a convex shape, the distance from a reference point to a supporting line with a given normal. Here: the ring centre's height above the floor as a function of tilt.</dd>
+    <dt>Contact mode</dt><dd>Whether the robot stands on its wheels (pivot at the axle) or rolls on its rings (pivot at the ring centre).</dd>
+    <dt>SFLP</dt><dd>"Sensor fusion low power": the IMU's built-in orientation filter. Used here only as a cross-check.</dd>
+    <dt>Mounting alignment</dt><dd>The angular offset between the IMU's axes and the body frame. Corrected in pitch by <code>zero</code>.</dd>
+  </dl>
+</main>
+</body>
+</html>
