@@ -39,7 +39,7 @@ The Zero, the IMU, a CAN transceiver and a 5 V buck share one protoboard near th
 - **Power:** 3S 18650 pack to a 5 V buck (1 A) on the protoboard, into the Zero's 5V pin. A Schottky on the Zero makes this safe with USB plugged in too. The Zero's 3V3 feeds the IMU and the transceiver's logic side.
 - **CAN:** a SIT1051T/3 (the version with a VIO pin): VCC 5 V, VIO 3.3 V so its RXD output never exceeds 3.3 V, S tied low for normal mode. One JST-GH 3-pin connector per driver. Leave the termination jumper open if the drivers are at the bus ends.
 - **IMU:** on the protoboard near the top of the body, mounted rigidly with axes x forward, y along the axle, z up, on SPI at its 10 MHz maximum. Its offsets from the axle and from the ring centre go in the config, so the filter can subtract the extra acceleration it feels (see Risks).
-- **Test points:** GND, 3V3, CANH/CANL, INT1 and GPIO48.
+- **Test points:** GND, 3V3, CANH/CANL and INT1.
 
 ## How it works
 

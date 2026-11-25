@@ -89,7 +89,7 @@ constexpr gpio_num_t PIN_RGB_LED  = GPIO_NUM_60;  // WS2812B-1010 (strapping pin
 constexpr gpio_num_t PIN_BOOT_BTN = GPIO_NUM_61;  // active low (strapping pin: don't hold at reset)
 
 // Spare / optional (unused until the user decides; see §12)
-constexpr gpio_num_t PIN_TIMING   = GPIO_NUM_48;  // test builds: high during each control cycle
+// GPIO48: spare.
 // GPIO50 / GPIO51: I2C SDA / SCL, reserved for a future INA226 battery monitor.
 // GPIO47 / GPIO49: spare; CAN1 TX / RX if a second bus is ever used.
 // GPIO6: spare, slow signals only (next to the antenna). GPIO58/59: UART0, leave free.
@@ -456,7 +456,7 @@ Runaway (in mode W), lifted-wheel and battery cut-outs are **not** included unti
    - Out of the task: an SPSC ring buffer (telemetry) and a seqlock snapshot (latest state for console/web).
    - Into the task: a FreeRTOS queue polled non-blocking at the start of each cycle (settings changes, mode, references, test currents).
 4. **Arduino `loop()`.** It runs on core 1. Leave it empty: `vTaskDelete(NULL)` in `setup()` after creating the tasks.
-5. **Cycle budget** at 960 Hz is 1.04 ms. Target is under 300 µs from INT1 to the CAN frame being queued. Measure with `PIN_TIMING` and a logic analyser in Stage 5.
+5. **Cycle budget** at 960 Hz is 1.04 ms. Target is under 300 µs from INT1 to the CAN frame being queued. Measure it in firmware in Stage 5: the INT1 ISR stores an `esp_timer` timestamp, the control task records the time when the `0x010` frame is queued, and the cycle time goes into the telemetry sample (§8.4). No timing pin.
 
 ### 8.3 Console (text, 115200 baud nominal; it's USB CDC)
 
@@ -560,9 +560,9 @@ USB alone gives the 5V pin only about 4.6–4.7 V (VBUS through a Schottky), onl
 - **Acceptance:** (A) passes; signs match §4.4; bus load measured and recorded.
 
 ### Stage 5: Real-time loop at 0 A
-- **Tasks:** full §8 task structure, safety gate §7.6, state machine stub (Disabled only), binary telemetry and `tools/telemetry.py`, `PIN_TIMING`.
+- **Tasks:** full §8 task structure, safety gate §7.6, state machine stub (Disabled only), binary telemetry and `tools/telemetry.py`, INT1→CAN latency and cycle time measured in firmware (§8.2 rule 5).
 - **Tests:**
-  - Logic analyser on INT1 and `PIN_TIMING`.
+  - Cycle time and INT1→CAN latency from telemetry (min, mean, max over 10 min).
   - CAN Bench gap monitor on `0x010` for 10 min, Wi-Fi off, then with a Wi-Fi STA connected and pinging (temporary test code on core 0).
   - Trigger an NVS write while running and confirm it's refused.
   - With motors spinning at a test current, log the gyro and report the spectrum: look for frame resonances.

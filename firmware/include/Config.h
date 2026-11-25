@@ -2,8 +2,8 @@
 #pragma once
 
 #define FW_NAME    "SBR controller"
-#define FW_VERSION "0.0.0"
-#define FW_STAGE   0
+#define FW_VERSION "0.1.0"
+#define FW_STAGE   1
 
 // Set by scripts/build_info.py from git. No build date or time anywhere in
 // the image, so the same commit builds the same binary (Stage 0 acceptance).

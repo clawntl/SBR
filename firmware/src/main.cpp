@@ -4,16 +4,37 @@
 
 #include "app/Console.h"
 #include "app/StatusLed.h"
+#include "can/CanBus.h"
+#include "imu/Lsm6dsv16x.h"
 
 void setup()
 {
     Serial.begin(115200);
 
-    // USB CDC: give a connected terminal a moment so the banner isn't lost.
-    // Doesn't wait at all if no host is attached.
-    for (int i = 0; i < 50 && !Serial; ++i) delay(10);
+    // USB CDC: after a reset the Zero re-enumerates and a serial monitor takes
+    // a few seconds to reattach, so wait for the port to be opened (HWCDC's
+    // `Serial` is true only once the host polls it) before printing the boot
+    // log. On USB with no terminal open this costs up to kTerminalWaitMs; with
+    // no USB at all (no SOF after kUsbDetectMs) it stops waiting.
+    constexpr uint32_t kTerminalWaitMs = 10000;
+    constexpr uint32_t kUsbDetectMs    = 1000;
+    const uint32_t t0 = millis();
+    while (!Serial && millis() - t0 < kTerminalWaitMs) {
+        if (!Serial.isPlugged() && millis() - t0 > kUsbDetectMs) break;
+        delay(10);
+    }
 
     Console::printBanner();
+
+    // Protoboard bring-up (Stage 1). Both install their interrupts on core 1.
+    if (Lsm6dsv16x::begin()) {
+        uint8_t id    = 0;
+        const bool ok = Lsm6dsv16x::readWhoAmI(id);
+        Serial.printf("IMU: WHO_AM_I 0x%02X %s\n", id,
+                      !ok ? "(SPI error)" : id == LSM6DSV16X_ID ? "ok" : "WRONG, expected 0x70");
+    }
+    CanBus::begin();
+
     StatusLed::start();
     Console::start();
 

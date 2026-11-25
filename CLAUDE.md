@@ -15,6 +15,6 @@ Controller firmware for a two-wheeled balancing robot with rings (sister project
 
 ## Current stage
 
-Stage 0 accepted 2026-11-25. Stage 1 next: waiting for the protoboard (spec §10 hardware table).
+Stage 1 accepted 2026-11-25. Stage 2 (IMU stream) next.
 
 Update this line when a stage is accepted.

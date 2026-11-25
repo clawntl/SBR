@@ -6,9 +6,12 @@
 #include <esp_system.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "Config.h"
+#include "can/CanBus.h"
+#include "imu/Lsm6dsv16x.h"
 
 static_assert(ESP_ARDUINO_VERSION_MAJOR == FW_EXPECT_ARDUINO_MAJOR &&
                   ESP_ARDUINO_VERSION_MINOR == FW_EXPECT_ARDUINO_MINOR &&
@@ -38,6 +41,62 @@ const char *resetReasonName(esp_reset_reason_t r)
     }
 }
 
+// `imuid [n]`: n WHO_AM_I reads (default 1); all must read 0x70.
+void cmdImuId(const char *arg)
+{
+    long n = 1;
+    if (*arg != '\0') {
+        char *end = nullptr;
+        n         = strtol(arg, &end, 10);
+        if (*end != '\0' || n < 1 || n > 100000) {
+            Serial.println("usage: imuid [n], n = 1..100000");
+            return;
+        }
+    }
+    long good = 0, wrong = 0, spiErr = 0;
+    uint8_t id = 0, lastWrong = 0;
+    for (long i = 0; i < n; ++i) {
+        if (!Lsm6dsv16x::readWhoAmI(id)) {
+            ++spiErr;
+        } else if (id == LSM6DSV16X_ID) {
+            ++good;
+        } else {
+            ++wrong;
+            lastWrong = id;
+        }
+    }
+    if (n == 1) {
+        if (spiErr) {
+            Serial.println("WHO_AM_I: SPI error");
+        } else {
+            Serial.printf("WHO_AM_I = 0x%02X (%s)\n", id,
+                          id == LSM6DSV16X_ID ? "ok, LSM6DSV16X" : "WRONG, expected 0x70");
+        }
+        return;
+    }
+    Serial.printf("WHO_AM_I: %ld/%ld correct, %ld wrong", good, n, wrong);
+    if (wrong) Serial.printf(" (last 0x%02X)", lastWrong);
+    Serial.printf(", %ld SPI errors\n", spiErr);
+}
+
+// `canping`: one ping on 0x7F0, then the bus status. `canping on|off`: ping
+// every 100 ms and echo received frames.
+void cmdCanPing(const char *arg)
+{
+    if (strcmp(arg, "on") == 0) {
+        CanBus::setTest(true);
+        Serial.println("canping on: 0x7F0 every 100 ms, echoing frames received on 0x100-0x10F");
+    } else if (strcmp(arg, "off") == 0) {
+        CanBus::setTest(false);
+        CanBus::printStatus();
+    } else if (*arg == '\0') {
+        Serial.printf("ping %s\n", CanBus::ping() ? "queued" : "NOT queued");
+        CanBus::printStatus();
+    } else {
+        Serial.println("usage: canping [on|off]");
+    }
+}
+
 void handleLine(char *line)
 {
     // Trim trailing whitespace and leading spaces.
@@ -46,10 +105,25 @@ void handleLine(char *line)
     while (*line == ' ' || *line == '\t') ++line;
     if (*line == '\0') return;
 
-    if (strcmp(line, "ver") == 0) {
+    // Split into command and argument.
+    char *arg = line;
+    while (*arg != '\0' && *arg != ' ' && *arg != '\t') ++arg;
+    if (*arg != '\0') {
+        *arg++ = '\0';
+        while (*arg == ' ' || *arg == '\t') ++arg;
+    }
+
+    if (strcmp(line, "ver") == 0 && *arg == '\0') {
         Console::printBanner();
+    } else if (strcmp(line, "imuid") == 0) {
+        cmdImuId(arg);
+    } else if (strcmp(line, "canping") == 0) {
+        cmdCanPing(arg);
+    } else if (strcmp(line, "canloop") == 0 && *arg == '\0') {
+        CanBus::loopbackSelfTest();
     } else {
-        Serial.printf("unknown command: %s\n", line);
+        Serial.printf("unknown command: %s%s%s\n", line, *arg ? " " : "", arg);
+        Serial.println("commands: ver, imuid [n], canping [on|off], canloop");
     }
 }
 
